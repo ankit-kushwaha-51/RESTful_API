@@ -1,95 +1,127 @@
-# /src/views/BlogpostView.py
-from flask import request, g, Blueprint, json, Response
+# /src/views/UserView
+
+from flask import request, json, Response, Blueprint, g
+from ..models.UserModel import UserModel, UserSchema
 from ..shared.Authentication import Auth
-from ..models.BlogpostModel import BlogpostModel, BlogpostSchema
 
-blogpost_api = Blueprint('blogpost_api', __name__)
-blogpost_schema = BlogpostSchema()
+user_api = Blueprint('user_api', __name__)
+user_schema = UserSchema()
 
 
-@blogpost_api.route('/', methods=['POST'])
-@Auth.auth_required
+@user_api.route('/', methods=['POST'])
 def create():
     """
-  Create Blogpost Function
-  """
+    Create User Function
+    """
     req_data = request.get_json()
-    req_data['owner_id'] = g.user.get('id')
-    data, error = blogpost_schema.load(req_data)
+    data, error = user_schema.load(req_data)
+
     if error:
         return custom_response(error, 400)
-    post = BlogpostModel(data)
-    post.save()
-    data = blogpost_schema.dump(post).data
-    return custom_response(data, 201)
+
+    # check if user already exist in the db
+    user_in_db = UserModel.get_user_by_email(data.get('email'))
+    if user_in_db:
+        message = {'error': 'User already exist, please supply another email address'}
+        return custom_response(message, 400)
+
+    user = UserModel(data)
+    user.save()
+    ser_data = user_schema.dump(user).data
+    token = Auth.generate_token(ser_data.get('id'))
+    return custom_response({'jwt_token': token}, 201)
 
 
-@blogpost_api.route('/', methods=['GET'])
+@user_api.route('/', methods=['GET'])
+@Auth.auth_required
 def get_all():
     """
-  Get All Blogposts
-  """
-    posts = BlogpostModel.get_all_blogposts()
-    data = blogpost_schema.dump(posts, many=True).data
-    return custom_response(data, 200)
-
-
-@blogpost_api.route('/<int:blogpost_id>', methods=['GET'])
-def get_one(blogpost_id):
+    Get all users
     """
-  Get A Blogpost
-  """
-    post = BlogpostModel.get_one_blogpost(blogpost_id)
-    if not post:
-        return custom_response({'error': 'post not found'}, 404)
-    data = blogpost_schema.dump(post).data
-    return custom_response(data, 200)
+    users = UserModel.get_all_users()
+    ser_users = user_schema.dump(users, many=True).data
+    return custom_response(ser_users, 200)
 
 
-@blogpost_api.route('/<int:blogpost_id>', methods=['PUT'])
+@user_api.route('/<int:user_id>', methods=['GET'])
 @Auth.auth_required
-def update(blogpost_id):
+def get_a_user(user_id):
     """
-  Update A Blogpost
-  """
-    req_data = request.get_json()
-    post = BlogpostModel.get_one_blogpost(blogpost_id)
-    if not post:
-        return custom_response({'error': 'post not found'}, 404)
-    data = blogpost_schema.dump(post).data
-    if data.get('owner_id') != g.user.get('id'):
-        return custom_response({'error': 'permission denied'}, 400)
+    Get a single user
+    """
+    user = UserModel.get_one_user(user_id)
+    if not user:
+        return custom_response({'error': 'user not found'}, 404)
 
-    data, error = blogpost_schema.load(req_data, partial=True)
+    ser_user = user_schema.dump(user).data
+    return custom_response(ser_user, 200)
+
+
+@user_api.route('/me', methods=['PUT'])
+@Auth.auth_required
+def update():
+    """
+    Update me
+    """
+    req_data = request.get_json()
+    data, error = user_schema.load(req_data, partial=True)
     if error:
         return custom_response(error, 400)
-    post.update(data)
 
-    data = blogpost_schema.dump(post).data
-    return custom_response(data, 200)
+    user = UserModel.get_one_user(g.user.get('id'))
+    user.update(data)
+    ser_user = user_schema.dump(user).data
+    return custom_response(ser_user, 200)
 
 
-@blogpost_api.route('/<int:blogpost_id>', methods=['DELETE'])
+@user_api.route('/me', methods=['DELETE'])
 @Auth.auth_required
-def delete(blogpost_id):
+def delete():
     """
-  Delete A Blogpost
-  """
-    post = BlogpostModel.get_one_blogpost(blogpost_id)
-    if not post:
-        return custom_response({'error': 'post not found'}, 404)
-    data = blogpost_schema.dump(post).data
-    if data.get('owner_id') != g.user.get('id'):
-        return custom_response({'error': 'permission denied'}, 400)
-
-    post.delete()
+    Delete a user
+    """
+    user = UserModel.get_one_user(g.user.get('id'))
+    user.delete()
     return custom_response({'message': 'deleted'}, 204)
+
+
+@user_api.route('/me', methods=['GET'])
+@Auth.auth_required
+def get_me():
+    """
+    Get me
+    """
+    user = UserModel.get_one_user(g.user.get('id'))
+    ser_user = user_schema.dump(user).data
+    return custom_response(ser_user, 200)
+
+
+@user_api.route('/login', methods=['POST'])
+def login():
+    """
+    User Login Function
+    """
+    req_data = request.get_json()
+
+    data, error = user_schema.load(req_data, partial=True)
+    if error:
+        return custom_response(error, 400)
+    if not data.get('email') or not data.get('password'):
+        return custom_response({'error': 'you need email and password to sign in'}, 400)
+    user = UserModel.get_user_by_email(data.get('email'))
+    if not user:
+        return custom_response({'error': 'invalid credentials'}, 400)
+    if not user.check_hash(data.get('password')):
+        return custom_response({'error': 'invalid credentials'}, 400)
+    ser_data = user_schema.dump(user).data
+    token = Auth.generate_token(ser_data.get('id'))
+    return custom_response({'jwt_token': token}, 200)
 
 
 def custom_response(res, status_code):
     """
-  Custom Response Function
-  """
+    Custom Response Function
+    """
     return Response(
         mimetype="application/json",
         response=json.dumps(res),
